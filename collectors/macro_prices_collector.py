@@ -47,6 +47,7 @@ QT_CODES = {
     'usIXIC': ('IXIC', '纳斯达克'),
     'usINX':  ('SP500', '标普500'),
     'sh000300': ('CSI300', '沪深300'),
+    'whUSDJPY': ('JPY', '日元'),
 }
 
 
