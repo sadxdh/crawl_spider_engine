@@ -30,6 +30,11 @@ from collectors.base_collector import BaseCollector
 _QT_URL = 'https://qt.gtimg.cn/q='
 _HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0'}
 
+# 美债收益率：FRED API（10Y/30Y）
+_FRED_API_KEY = os.getenv('FRED_API_KEY', '')
+_FRED_URL = 'https://api.stlouisfed.org/fred/series/observations'
+_FRED_SERIES = [('DGS10', 'US10Y', '10Y美债'), ('DGS30', 'US30Y', '30Y美债')]
+
 # 腾讯行情必须走 SOCKS5（直连被重置）
 _SOCKS5_PROXY = (os.getenv('PRICE_SOCKS5_PROXY')
                  or os.getenv('ALL_PROXY')
@@ -153,12 +158,45 @@ class MacroPricesCollector(BaseCollector):
             logger.warning(f'[macro_prices] 腾讯行情请求失败: {e}')
         return results
 
+    # ── FRED 美债收益率 ────────────────────────────────────
+
+    def _fetch_fred(self) -> dict:
+        """FRED 美债收益率（DGS10/DGS30），直连（stlouisfed.org 可达）"""
+        if not _FRED_API_KEY:
+            return {}
+        results = {}
+        try:
+            for sid, ticker, display in _FRED_SERIES:
+                r = requests.get(
+                    _FRED_URL,
+                    params={'series_id': sid, 'api_key': _FRED_API_KEY,
+                            'file_type': 'json', 'limit': 2, 'sort_order': 'desc'},
+                    headers={'User-Agent': 'Mozilla/5.0'}, timeout=15,
+                )
+                if r.status_code != 200:
+                    continue
+                obs = r.json().get('observations', [])
+                for o in obs[:1]:
+                    val = o.get('value', '')
+                    if val and val != '.':
+                        y = float(val)
+                        results[ticker] = {
+                            'latest': round(y, 3), 'high_24h': round(y, 3),
+                            'low_24h': round(y, 3), 'open_24h': round(y, 3),
+                            'change_pct': 0, 'ticker': ticker, 'display': display,
+                            'asof_ts': int(time.time() * 1000), 'source': 'fred',
+                        }
+        except Exception as e:
+            logger.warning(f'[macro_prices] FRED 美债获取失败: {e}')
+        return results
+
     # ── BaseCollector 实现 ───────────────────────────────────
 
     def poll_once(self) -> list:
         results = self._fetch_qt(list(QT_CODES.keys()))
+        results.update(self._fetch_fred())
         if not results:
-            logger.warning('[macro_prices] 腾讯行情无数据（代理不可用？）')
+            logger.warning('[macro_prices] 无数据（腾讯行情/FRED 均失败）')
         rows = []
         now_min = int(time.time() // 60) * 60  # 分钟级去重键
         for ticker, p in results.items():
@@ -171,7 +209,7 @@ class MacroPricesCollector(BaseCollector):
                 'ts': datetime.fromtimestamp(now_min),
                 'md5_value': f'{ticker}|ticker|{now_min}',
             })
-        logger.info(f'[macro_prices] 腾讯行情: {len(results)} 品种 ({", ".join(sorted(results.keys()))})')
+        logger.info(f'[macro_prices] 腾讯行情+FRED: {len(results)} 品种 ({", ".join(sorted(results.keys()))})')
         return rows
 
 
