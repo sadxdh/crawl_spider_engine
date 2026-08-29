@@ -1,0 +1,14 @@
+{
+  "name": "crawl-node-service",
+  "version": "1.0.0",
+  "description": "Node.js RS/JSL bypass service for crawl_spider_engine",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "jsdom": "^24.0.0",
+    "axios": "^1.6.0"
+  }
+}

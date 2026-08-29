@@ -1,0 +1,208 @@
+================================================================================
+爬虫采集逻辑审计报告 #3 — 新旧项目对比
+日期: 2026-06-12
+新旧对比: data_crawl_server (老) vs crawl_spider_engine (新)
+================================================================================
+
+========================================================================
+1. SPIDER: IPO Declare A Shares (entity_ipo_declare_a_shares)
+   NEW: ipo_declare_spider.py  |  OLD: ipo_sse_spider.py + ipo_szse_spider.py + ipo_bse_spider.py + ipo_east_spider.py
+========================================================================
+STATUS: MAJOR
+
+Issues found:
+  - [MISSING SOURCE] New only covers SSE (上交所) and SZSE (深交所). Old also covers BSE (北交所) via ipo_bse_spider.py and ipo_east_spider.py. New has NO 北交所 coverage.
+  - [MISSING FIELD - SSE] Old extracts `city = issuer['s_areaNameDesc']` (ipo_sse_spider.py L82). New does not extract city at all.
+  - [MISSING FIELD - SSE & SZSE] Old sends separate API request to fetch full `ipo_status` (IPO process timeline with publish_date + examine_status per stage). New only uses `examine_status` as `ipo_status`, losing the full timeline (ipo_sse_spider.py L141-161, ipo_szse_spider.py L107-116).
+  - [MISSING FIELD - SZSE] Old item model has `register_status` field (finance_item.py L289). New item does not have this field at all.
+  - [URL DIFFERENCE - SZSE] Old uses `pageIndex={page}` where page is 0-based (start_page-1). New uses `pageIndex={page-1}`. Both result in 0-based. OK.
+  - [SSE - Attachment file_type] New maps empty string to `问询与回复` in _SSE_FTYPE. In old, file_type is set to '' (empty) for disclosureMaterials, then overridden by res['matnm'] if non-empty (ipo_szse_spider.py L133). For SSE, old and new both use the same _SSE_FTYPE mapping. Same behavior, OK.
+  - [BSE - NOT COVERED] Old BSE spider (ipo_bse_spider.py) fetches from bse.cn with its own token/status mapping, handles xxgkInfo file categories differently (FYYJS/GPFXBJS/GPFXSMS/GPZJXCGPTJS/SJBG with BHG/SBG/SYG versions). All missing in new.
+  - [MD5] Same formula: entity_name + str(update_date) + examine_status. OK.
+  - Both SSE/SZSE use same Attach MD5: ipo_md5 + attach_title + publish_date. OK.
+
+========================================================================
+2. SPIDER: IPO Declare HK (entity_ipo_declare_hk_shares)
+   NEW: ipo_declare_hk_spider.py  |  OLD: hkex_spider.py
+========================================================================
+STATUS: MINOR
+
+Issues found:
+  - [MISSING TRANSFORM] Old applies `chinese_traditional_to_simplified(entity_name)` before storing (hkex_spider.py L153). New does NOT convert traditional Chinese to simplified. This affects dedup and searchability.
+  - [FIELD - entity_id] Old only sets entity_id for `已上市` status (hkex_spider.py L99). New sets entity_id for ALL statuses via `res.get('st')` (ipo_declare_hk_spider.py L87). The `st` field may be empty/non-existent for non-listed statuses. This could be harmless or could leak incorrect data.
+  - [API/URL] Same 5 endpoints. OK.
+  - [STATUS MAPPING] Same _STATUS_MAP. OK.
+  - [MD5] Same formula: entity_name + ipo_status + update_date. OK.
+  - [Fields] Same fields extracted. declare_info, declare_date, prospectus all None in both. OK.
+  - [Paging] Both pull full list (no pagination needed). OK.
+
+========================================================================
+3. SPIDER: IPO Declare HK Attachment (entity_ipo_declare_hk_shares_mapping)
+   NEW: ipo_declare_hk_attachment_spider.py  |  OLD: hkex_spider.py save_data() (L165-179)
+========================================================================
+STATUS: MINOR
+
+Issues found:
+  - [MISSING TRANSFORM] Old applies `chinese_traditional_to_simplified(attachment_title)` (hkex_spider.py L175). New does NOT convert. Same bug as parent spider.
+  - [ARCHITECTURE] Old saves attachments in the SAME spider run as main records. New uses a SEPARATE spider. This means two separate scheduling/deployment checkpoints. Not a functional issue but adds operational complexity.
+  - [MD5] Old: md5(title + url + date). New: md5(title + url + date). Same formula. OK.
+  - [API/URL] Same attachment parsing logic from `ls` array in response. OK.
+
+========================================================================
+4. SPIDER: Law Firm (law_firm_info + law_firm_lawyer_info)
+   NEW: law_firm_spider.py  |  OLD: law_firm.py
+========================================================================
+STATUS: MAJOR
+
+Issues found:
+  - [MISSING SUB-SPIDER] Old fetches lawyer list via `get_lawyer_list()` and writes to `law_firm_lawyer_info` table (law_firm.py L156-188). New DOES NOT fetch lawyer list at all. The law_firm_lawyer_info table will have NO data from the new spider.
+  - [FILTER BEHAVIOR] Old always uses `pzslsj: 0` (no time filter). New uses `pzslsj_filter` with time-based window (law_firm_spider.py L73-79): end_page controls time window (default 7 days). When end_page > 10, filter=0 (full). This means DEFAULT new behavior will only scrape recently updated firms, potentially missing historical data that the old spider captures.
+  - [COOKIE] Old uses fixed UUID `c2d01b2b-b4ad-4628-83a0-ee9a1a59226a` for crawlerCookie (law_firm.py L20). New generates fresh random UUID (law_firm_spider.py L86). Could affect anti-crawl detection at moj.gov.cn.
+  - [DETAIL] Same fields extracted for law_firm_info. OK.
+  - [MD5] Same formula: uscc + establish_date. OK.
+
+========================================================================
+5. SPIDER: Law Case (spider_case_raw)
+   NEW: law_case_spider.py  |  OLD: rmfy_case.py
+========================================================================
+STATUS: MAJOR
+
+Issues found:
+  - [MISSING TABLE] Old writes to TWO tables: `spider_case_raw` (list data) AND `case_parse_main` (detailed content from second API call). New ONLY writes to `spider_case_raw`. The `case_parse_main` table gets NO data from new spider.
+  - [MISSING FIELDS - case_parse_main] Old second API call extracts: storage_no (入库编号), court_name (审理法院), key_words (关键词), trial_procedure (审理程序), trial_year (审判年份), case_level (案例级别), basic_facts (基本案情), judgment_reason (裁判理由), judgment_result (裁判结果), related_info (关联信息). All lost in new spider.
+  - [COOKIE MANAGEMENT] Old uses `ManageLawCaseCookies` class with pooled cookie rotation (rmfy_case.py L17). New fetches a single random account from Redis per job run (law_case_spider.py L40-54). If one account fails, new spider aborts entirely; old could rotate through pool.
+  - [COOKIE DELIVERY] New sends cookies as header string (`Cookie` header, L68-69). Old passes cookies dict to requests (rmfy_case.py L46). The header approach may not work correctly if scrapy's cookie middleware interferes.
+  - [API/URL] Same endpoint, same params. OK.
+  - [field: case_type] Both use `{case_sort}-{court_sort}`. OK.
+  - [MD5] Both use md5(title + "人民法院案例库"). OK.
+
+========================================================================
+6. SPIDER: Legal Risk / Limit Exit (entity_limit_exit)
+   NEW: legal_risk_spider.py  |  OLD: shgjrmfy.py
+========================================================================
+STATUS: OK
+
+Issues found:
+  - No significant differences. Same field extraction logic, same XPath patterns, same md5 formula (md5(case_number)).
+  - New yields all table fields (including empty placeholders). Old uses Item class which auto-defaults missing fields. No effective difference.
+  - Minor: old uses `proxy_enable=True`, new has no proxy override (defaults to `no_proxy` which could fail if the site IP-blocks).
+  - Referer header: New sets it explicitly. Old uses broader Sec-Fetch-* headers chain. Functionally equivalent.
+  - `amount` field parsing: Both handle "承办法院、联系电话" split. No regression.
+
+========================================================================
+7. SPIDER: Person Pedia (personal_character_encyclopedia + entity_staff_number)
+   NEW: person_pedia_spider.py  |  OLD: askci_spider.py
+========================================================================
+STATUS: MAJOR
+
+Issues found:
+  - [MISSING FIELDS - person_pedia] Old extracts 15 fields. New sets these as EMPTY strings:
+      stock_name          = ''  (old: data['stock_name'])
+      appoint_enterprise  = ''  (old: data['entity_name'])
+      appoint_end_date    = ''  (old: extract from td[5])
+      brief_introduction  = ''  (old: extract from td[11]/p)
+      salary              = ''  (old: extract from td[9])
+      hold_stock_num      = ''  (old: extract from td[10])
+    This is a critical regression — 6 fields are completely lost.
+  - [MD5 ORDER BUG] Old: md5(stock_code + person_name). New: md5(name + code). The ORDER of concatenation is REVERSED (askci_spider.py L83 vs person_pedia_spider.py L60). This produces a DIFFERENT md5 hash, effectively losing dedup continuity. Existing records cannot be de-duplicated against.
+  - [XPATH DIFFERENCE - detail] New adds fallback selector `//div[@class="person_table"]//tr` which old does not have. This is a potential enhancement not regression.
+  - [XPATH - column mapping] New uses union selectors (e.g. `./td[3]/text()|./td[2]//text()`) that try to handle two different table layouts. Old uses fixed indices. The fallback indices may pick wrong cells for certain formats.
+  - [Staff - Missing fields] Old extracts `entity_name` and `sample_type` fields. New has them as empty strings.
+  - [Staff - XPath] Old uses `//table[@border="1"]/tbody/tr`. New uses `//table//tr` (broader match, potential false positives from other tables on page).
+
+========================================================================
+8. SPIDER: Bill Default (entity_bill_default + bill_overdue_list)
+   NEW: bill_default_spider.py  |  OLD: bill_file_spider.py
+========================================================================
+STATUS: MINOR
+
+Issues found:
+  - [DOMAIN CHANGE] Old uses `disclosure.shcpe.com.cn`. New uses `disclosure.cpisp.shcpe.com.cn`. Different subdomain — the old domain may redirect to new or may no longer work.
+  - [ATTACHMENT HANDLING] New processes ALL attachments from detail API (bill_default_spider.py L78). Old only takes `attachments[0]` (bill_file_spider.py L72). New is more comprehensive — this is an improvement, not a regression.
+  - [DATE PARSING] Old uses `match_text()` + `dispose_update_date()` + `strptime`. New uses `re.search()` + string replace. Both aim for same format. May differ in edge cases (e.g. title without "日" suffix).
+  - [PDF PARSING] Both use pdfplumber with same extraction logic. OK.
+  - [MD5] Both use md5(query_time + entity_name). OK.
+  - [UNUSED FIELDS] Both set many fields as empty strings (acceptor, drawer, bill_amount, disclosure_date, etc.). Old Item model defines these as optional; new explicitly sets to ''. No data loss since old also never populates these from PDF.
+  - [bill_overdue_list] Both write to this table with same fields. OK.
+
+========================================================================
+9. SPIDER: Material CNEPTP (material_info)
+   NEW: material_cneptp_spider.py  |  OLD: cneptp_material_finance.py
+========================================================================
+STATUS: MAJOR
+
+Issues found:
+  - [MISSING PAGINATION] Old calls `get_page_num()` to get total pages and iterates ALL pages (cneptp_material_finance.py L136-137). New hardcodes pageNum=1 and pageSize=20 and ONLY fetches page 1 (material_cneptp_spider.py L145). This is a CRITICAL data loss — only the first 20 items per category are collected.
+  - [MISSING AREA ITERATION] Old iterates province-level and city-level areas via `get_area()` API (cneptp_material_finance.py L230-260). New only queries national level (全国) with areaCode=0. Province/city-specific pricing data is completely lost.
+  - [ERROR RETRY] Old retries token refresh on failed list parsing (cneptp_material_finance.py L140). New only refreshes token once at startup.
+  - [RESUME LOGIC] Old has `is_start` checkpoint logic that allows resuming from "卷板" category. New has no resume support.
+  - [FIELD - industry_type] Old hardcodes `"大宗商品"`. New sets `industry_type = category['gcName']` from API response. May produce different values if gcName differs from "大宗商品".
+  - [FIELD - material_spec] Old does `json.dumps(material_spec)` if not None. New uses raw string value. Different format in DB.
+  - [MD5] Same formula: material_name + unitId + third_id + province + city. OK.
+  - [TOKEN REFRESH] Same 3-step OAuth flow. OK.
+
+========================================================================
+10. SPIDER: Patent / Intellectual Property (ml_org_patent_basic_info_file_upload)
+    NEW: patent_spider.py  |  OLD: intellectual_property_right.py
+========================================================================
+STATUS: MAJOR — NOT A DIRECT MIGRATION
+
+Issues found:
+  - [DIFFERENT SOURCE TABLE] Old writes to `honor_information` table (企业荣誉). New writes to `ml_org_patent_basic_info_file_upload` (专利/集成电路公告). These are COMPLETELY DIFFERENT data products.
+  - [DIFFERENT COLUMNID] Old uses `columnid='75'` (知识产权示范/优势企业). New uses `columnid='164'` (集成电路布图设计公告). Different data source entirely.
+  - [DIFFERENT PARSING] Old parses structured tables in detail pages. New parses meta description + regex splits for patent entries.
+  - [NO OLD COUNTERPART] The new patent spider does NOT correspond to the old intellectual_property_right.py spider. This comparison is invalid — these are two separate spiders for two separate purposes.
+  - RECOMMENDATION: The old `intellectual_property_right_spider` (honor_information table) likely still needs its own migration. The new patent spider is a NEW spider for a different data source.
+
+========================================================================
+11. SPIDER: Debt Finance Announcement (debt_finance_announcement)
+    NEW: debt_finance_spider.py  |  OLD: interbank.py
+========================================================================
+STATUS: MAJOR
+
+Issues found:
+  - [MISSING TABLE] Old writes to TWO tables: `debt_finance_announcement` (main) AND `debt_finance_announcement_mapping` (attachments). New ONLY writes `debt_finance_announcement`. The attachment/mapping table gets NO data.
+  - [MISSING SUB-CHANNELS] Old sends detailed `channelNameList` and `notice_type`/`meet_type` arrays per channel (interbank.py L49-64). New only sends `channelNameList:[]` with empty arrays for all channels. The API may return different results when sub-channel filtering is omitted.
+  - [FULL HISTORY] Old supports `end_page < 0` mode that triggers full historical crawl using `count_page` values (interbank.py L154-155). New has no equivalent feature.
+  - [HARDCODED URL] New announcement_url uses a hardcoded path with `202202/t20220218_199440.html` (debt_finance_spider.py L34). Old uses `self.detail_url.format(publish_id)`. The hardcoded path may not work for all records — looks like a copy-paste template value.
+  - [MISSING FIELDS] Old item model includes `entity_id` and `entity_name`. New response doesn't parse these (they'd come from content, not list API). Both leave them unset. No regression.
+  - [MD5] Same formula: md5(CHECK_TIME + title + PUBLISH_ID). OK.
+
+========================================================================
+12. SPIDER: New Century Rating (entity_credit_rating)
+    NEW: new_century_rating_spider.py  |  OLD: new_century_spider.py
+========================================================================
+STATUS: MINOR
+
+Issues found:
+  - [MISSING FORM FIELDS] Old sends additional form parameters: sort_val, sort_key, rank_stime, rank_etime, keyword, rank_type, main_type, rank_level, bound_type (new_century_spider.py L28-40). New only sends cid, limit, page. The API may return different/mis-sorted results without these filters.
+  - [COOKIE] Old includes a Cookie header with menu state tracking. New does not send cookies. May affect API behavior.
+  - [URL FOR url FIELD] Old sets `url = details_url` (detail page URL). New sets `url = f'...?cid={cid}'` (list API URL). Different value — the old URL would show a readable detail page, the new URL is just the API endpoint.
+  - [ENTITY_ID LOOKUP] Old queries `wentao_basedata.entity_info` to resolve entity_id from entity_name (new_century_spider.py L86-91). New always sets entity_id = None. No fallback lookup.
+  - [ENTITY_NAME] Old: `project_name = project_data['issuer'].replace('"', '')` and `entity_name = match_text(project_name, r'年(.*?公司)')`. New: extracts `issuer` from different response path `row.get('issuer','')` then same regex. Behavior depends on API response structure — may produce different values if response nesting differs.
+  - [ANNOUNCEMENT TITLE] Old: `pdf_filename = pdf_href.split('/')[-1]` (filename from URL). New: `pdf[0].get('name', '')` (name field from JSON). May differ if the API provides both.
+  - [MD5] Old: md5(project_name + str(rating_date)). New: md5(issuer + str(rd)). Old uses project_data['issuer'] (with quotes stripped), new uses row.get('issuer'). Should be equivalent but depends on API nesting.
+  - [cid VALUES] Both iterate cid=['51','61']. OK.
+  - [MISSING FIELDS] New item has empty string for: oss_url, rating_agency_id, rating_specification, rating_type. Old Item class has these as optional — same effective result.
+
+================================================================================
+SUMMARY
+================================================================================
+ MAJOR issues (data loss risk):  7 spiders
+  2. IPO Declare A Shares  — Missing BSE (北交所), missing city, missing full ipo_status timeline
+  4. Law Firm               — Missing lawyer list sub-table entirely
+  5. Law Case               — Missing case_parse_main table entirely
+  7. Person Pedia           — 6 critical fields not extracted, MD5 order reversed (dedup break)
+  9. Material CNEPTP        — Only page 1 fetched, no province/city iteration, massive data loss
+ 10. Patent                 — Not a direct migration (completely different spider/table)
+ 11. Debt Finance           — Missing attachment mapping table entirely, hardcoded URL, missing sub-channels
+
+ MINOR issues (functional gaps):  4 spiders
+  1. IPO Declare HK          — Missing simplified Chinese conversion
+  3. IPO Declare HK Attach   — Missing simplified Chinese conversion
+  8. Bill Default            — Domain name change (potential redirect issue)
+ 12. New Century Rating      — Missing form fields, cookie, entity_id lookup
+
+ OK:  1 spider
+  6. Legal Risk / Limit Exit — No significant differences
+================================================================================

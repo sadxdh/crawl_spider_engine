@@ -1,0 +1,362 @@
+================================================================================
+COLLECTION LOGIC AUDIT REPORT #2
+Date: 2026-06-12
+Scope: Old (data_crawl_server) vs New (crawl_spider_engine) spider comparison
+================================================================================
+
+================================================================================
+SECTION 1: AMAC FAMILY SPIDERS
+================================================================================
+
+--------------------------------------------------------------------------------
+SPIDER: amac_products -> private_fund_products
+STATUS: MAJOR
+Issues found:
+  - [md5_value] CRITICAL: Old uses md5(manager_name) only (line 277). New uses
+    md5(fund_name + fund_number) (line 43). Completely different dedup keys --
+    data deduplication behavior will diverge.
+  - [PAGING] Old reverses iteration -- gets total_pages then crawls the LAST 4
+    pages in reverse order (lines 232-236: range(total_pages-1, total_pages-5,
+    -1) + reversed content). New crawls from start_page to end_page forward.
+    Old skips the first N-4 pages entirely.
+  - [API call path] Old uses self.request() directly. New uses amac_post() for
+    list + amac_get() for detail. Internal logic equivalent, but depends on
+    separate utils module.
+  - [Field mapping] Same Chinese-to-English mapping (基金名称, 基金管理人名称, etc.).
+    No missing/extra populated fields for core data.
+  - [Empty fields] Both fill same empty fields (fund_id, fund_series, etc.)
+  - [XPath] Identical: //div[@class="info-body"]/div[1]/div[@class="table-response"]/table/tbody/tr
+
+--------------------------------------------------------------------------------
+SPIDER: amac_securities_product -> securities_company_product
+STATUS: MAJOR
+Issues found:
+  - [API field names] CRITICAL REGRESSION: Old uses Chinese-pinyin shortcut keys
+    from API response: cpmc, cpbm, gljg, tgjg, barq, slrq, dqr, tzlx, sffj, yzzt
+    (line 317-326 of fund_spider.py / line 42-51 of securities_product.py).
+    NEW uses English-named keys: mpiName, mpiProductCode, aoiName, mpiTrustee,
+    registeredDate, mpiCreateDate (line 26 of amac_securities_product.py).
+    These are DIFFERENT field names from what appears to be a different API
+    response format. If the API returns the old format, the new spider will
+    get empty data for all fields. If the API returns the new format, old spider
+    was wrong.
+  - [Missing fields] The new spider does NOT extract: due_date, investment_type,
+    whether_classification, operation_status. These are set to empty string
+    defaults (line 26). Old populates all from API response.
+  - [fund_url] New sets fund_url to '' (empty). Old standalone spider sets it to
+    detail page URL (line 52 of securities_product.py: f"https://gs.amac.org.cn/
+    amac-infodisc/res/pof/securities/detail.html?id={data['id']}").
+  - [PAGING] Old fund_spider.py: always range(5) -- only first 5 pages.
+    Old standalone: full range via total_pages. New: start_page to end_page.
+  - [md5_value] Same construction: product_name + product_code. OK.
+
+--------------------------------------------------------------------------------
+SPIDER: amac_private_equity -> securities_private_equity_fund
+STATUS: MINOR
+Issues found:
+  - [API field names] New uses fallback pattern (e.g. mpiName or productName)
+    (lines 30-44). This is MORE robust than old which uses fixed keys. OK.
+  - [Timestamp handling] New's _ts() checks if ts > 1e12 then //1000 (line 57).
+    Old always divides /1000 without threshold check. New's approach is safer
+    (handles both ms and second timestamps).
+  - [PAGING] Old reversed: range(total_pages-1, total_pages-5, -1). New: forward
+    from start_page to end_page. Different crawl coverage.
+  - [rand parameter] Old generates fresh random.random() per page (line 421).
+    New generates r once outside loop (line 20). New's approach is slightly
+    less random but functionally equivalent.
+  - [md5_value] Same: product_name + product_code. OK.
+  - [Field set] Same 10 fields. New adds fund_url from id (line 45). Old
+    standalone adds fund_url; old fund_spider.py does not. OK.
+
+--------------------------------------------------------------------------------
+SPIDER: amac_register_flow -> private_fund_register_process
+STATUS: MINOR
+Issues found:
+  - [BUG FIXED] Old has a confirmed bug: handling_feedback_number is passed
+    through time_localtime() (which converts millisecond timestamp to date
+    string) (line 897 of fund_spider.py, line 42 of private_fund_register.py).
+    This field is a COUNT (number of feedback rounds), not a timestamp!
+    New treats it as a raw string value (line 44), which is correct.
+  - [Timestamp handling] Same as above: _ts() with threshold vs old /1000 always.
+  - [PAGING] Old fund_spider.py: range(5) only. Old standalone: full range.
+    New: start_page to end_page. Different coverage.
+  - [md5_value] Same: mechanism_name. OK.
+  - [Field set] Identical 15 fields + md5_value. OK.
+
+================================================================================
+SECTION 2: LAND SPIDERS
+================================================================================
+
+--------------------------------------------------------------------------------
+SPIDER: jggg_land_spider -> entity_land_contract_signing
+  OLD: data_crawl_server/spider/economy/land_info/jggg_land_spider.py
+  NEW: crawl_spider_engine/spiders/economy/jggg_land_spider.py
+STATUS: MAJOR
+Issues found:
+  - [md5_value] CRITICAL: Old uses md5(entry_name + project_location) (line 86).
+    New uses md5(entry_name ONLY) (line 55: hashlib.md5(en.encode()).hexdigest()).
+    Completely different dedup -- new will treat entries same-name/different-
+    location as duplicates.
+  - [agreed_lower_limit / agreed_upper_limit] Old extracts from trs[10] nested
+    table (lines 81-83). New sets BOTH to EMPTY STRING (lines 56-57). These
+    fields are lost.
+  - [area suffix] Old appends '公顷' to area (line 53). New does NOT (line 41).
+  - [land_source] Old sets land_source = self.land_type (line 95). New sets
+    land_source to '' (line 63). Old identifies source sub-type.
+  - [PAGING] New uses start_page/end_page with page index: p='' for page 1 else
+    _{page-1} (adapted to landchina 0-based index system). Old uses 0-based.
+    Different but both correct for their respective URL schemas.
+  - [Land types] Both use same 5 types: hbgd1, zbcr1, pmcr1, gpcr1, xycr. OK.
+  - [XPath] Table path identical. Row indexing for data extraction identical.
+
+--------------------------------------------------------------------------------
+SPIDER: gdjg_jiangsu_land_spider -> entity_land_contract_signing
+  OLD: data_crawl_server/spider/economy/land_info/gdjg_jiangsu_land_spider.py
+  NEW: crawl_spider_engine/spiders/economy/gdjg_jiangsu_land_spider.py
+STATUS: MAJOR (potentially broken -- different website!)
+Issues found:
+  - [WEBSITE] CRITICAL: Old targets http://www.landjs.com (Jiangsu Land Market
+    API with landjs.com endpoints). New targets https://landchina.mnr.gov.cn
+    (National Land China site). THESE ARE COMPLETELY DIFFERENT WEBSITES with
+    different data, different APIs, and different page structures. The new
+    spider will NOT collect Jiangsu-specific land data.
+  - [DATA EXTRACTION] Old uses POST to landjs API (JSON response) with detailed
+    field parsing (20+ fields extracted: entry_name, project_location,
+    administrative_region, electronic_supervision_number, area, land_use_period,
+    land_level, transaction_price, land_use_rights_holder, approval_unit,
+    contract_signing_date, agreed_delivery_date, agreed_commencement_time,
+    agreed_completion_time, agreed_lower_limit, agreed_upper_limit, land_use,
+    land_supply_method, industry_classification, details) (lines 76-154).
+    New ONLY scrapes the LIST PAGE (NO detail page crawling!) and yields:
+    land_file_title, release_date, details (URL only), source='gdjg',
+    md5_value=md5(title). All other 20+ fields are EMPTY STRING.
+    This is a STUB implementation that captures only list-page metadata.
+  - [PAGING] Old: POST API with page-based indexing, multitasking. New: GET
+    with HTML page URL pattern index{p}.htm.
+  - [md5_value] Old: md5(entry_name + project_location). New: md5(title only).
+    Different dedup strategy.
+  - [DETAIL CRAWLING] Old crawls detail via POST to searchParcelInfo API,
+    extracting rich structured data. New NEVER visits detail pages.
+
+--------------------------------------------------------------------------------
+SPIDER: cjgs_land_spider -> entity_land_massif_publicity
+  OLD: data_crawl_server/spider/economy/land_info/cjgs_land_spider.py
+  NEW: crawl_spider_engine/spiders/economy/cjgs_land_spider.py
+STATUS: MAJOR
+Issues found:
+  - [Missing fields] New does NOT extract (all set to ''): publicity_period,
+    issuing_authority, contact_unit, unit_address, zip_code,
+    contact_phone_number, contacts, email, source, announcement_id.
+    Old extracts ALL of these from detail pages.
+  - [Fallback parsing] Old handles TWO table formats: (A) tabs-class div/table
+    and (B) table/tr/td[p]/table fallback (lines 52-130). New only handles
+    format A (tabs-class, line 43). Data from format B pages will be lost.
+  - [Contact info] Old has dedicated _extract_contact_info method (lines 134-165)
+    with structured extraction. New has none.
+  - [Validation] Old checks land_parcel_number or massif_position must exist
+    (line 75-78 new also checks line 48). Both OK.
+  - [XPath] New uses '.'.join(trs[N].xpath('./td[X]//text()')) with text join.
+    Old uses trs[0].xpath('string(./td[2])'). Different but both valid.
+  - [md5_value] Same: md5(land_parcel_number + massif_position). OK.
+  - [Land types] Old: xycr, hbgd, zbcr, gpcr, pmcr. New: same order. OK.
+
+--------------------------------------------------------------------------------
+SPIDER: gdgg_jiangsu_land_spider -> entity_land_massif_publicity
+  OLD: data_crawl_server/spider/economy/land_info/gdgg_jiangsu_land_spider.py
+  NEW: crawl_spider_engine/spiders/economy/gdgg_jiangsu_land_spider.py
+STATUS: MAJOR (potentially broken -- different website!)
+Issues found:
+  - [WEBSITE] CRITICAL: Same issue as gdjg_jiangsu. Old uses landjs.com
+    (Jiangsu Land Market). New uses landchina.mnr.gov.cn. Completely different
+    data source. New will NOT collect Jiangsu-specific land announcement data.
+  - [DATA EXTRACTION] Old has 3-level API chain: get_ggid -> get_gid -> parse_list
+    extracting 25+ fields including: land_parcel_number, elements, land_location,
+    units, transfer_manner, area, transfer_period, floor_area_ratio,
+    building_density, greening_rate, building_height_limit, land_use,
+    starting_price, guarantee_price, price_increase, listing_start_time,
+    listing_end_time, release_date, region, source, pdf_url, pdf_name (lines
+    43-136).
+    New ONLY scrapes LIST PAGE yielding: land_file_title, release_date, details
+    (URL only), source='gdgg', md5_value=md5(title). ALL REAL DATA FIELDS ARE
+    EMPTY. This is a STUB.
+  - [md5_value] Old: md5(land_parcel_number + land_location). New: md5(title only).
+  - [DETAIL CRAWLING] Old: 3-level API calls to extract structured JSON data.
+    New: NO detail page crawling at all.
+
+--------------------------------------------------------------------------------
+SPIDER: crgg_land_spider -> entity_land_transfer_announcement
+  OLD: data_crawl_server/spider/economy/land_info/crgg_land_spider.py
+  NEW: crawl_spider_engine/spiders/economy/crgg_land_spider.py
+STATUS: MAJOR
+Issues found:
+  - [Missing price fields] New does NOT extract (all set to ''): guarantee_price,
+    starting_price, price_increase, listing_start_time, listing_end_time
+    (lines 66-73). Old extracts all of these via iterative search of table rows
+    (lines 68-101 of old). These are critical financial fields for land transfer
+    announcements.
+  - [Date formatting] Old normalizes listing dates by replacing Chinese chars
+    (年->'-', 月->'-', 日->'') then using strptime (lines 88-97). New just
+    leaves empty. Format normalization is lost.
+  - [Price search] Old iterates rows to find guarantees/starting price by label
+    matching (lines 68-83). New has no such search logic.
+  - [XPath] Same table structure. OK for fields that ARE extracted.
+  - [md5_value] Same: md5(land_parcel_number + land_location). OK.
+  - [Land types] Both same: gyyd, syyd, zzyd, qtyd, zbgg, pmgg, gpgg, gkgg. OK.
+  - NOTE: Old LandSpider base class (land_spider.py) in old project also handles
+    crgg/cjgs/jggg. That base class has additional fields like 'listing_time'.
+
+--------------------------------------------------------------------------------
+SPIDER: dkgs_jiangsu_land_spider -> entity_land_transfer_announcement
+  OLD: data_crawl_server/spider/economy/land_info/dkgs_jiangsu_land_spider.py
+  NEW: crawl_spider_engine/spiders/economy/dkgs_jiangsu_land_spider.py
+STATUS: MAJOR (potentially broken -- different website!)
+Issues found:
+  - [WEBSITE] CRITICAL: Same issue. Old uses landjs.com (Jiangsu Land Market,
+    POST API to searchBargainParcel + searchParcelInfo). New uses
+    landchina.mnr.gov.cn. COMPLETELY DIFFERENT data source.
+  - [DATA EXTRACTION] Old extracts 18+ fields via two-level API: get_ggid ->
+    parse_list, extracting: land_file_title, land_parcel_number, massif_position,
+    land_area, region, transaction_price, transfer_period, land_use, transferee,
+    publicity_period, units, issuing_authority, contact_unit, unit_address,
+    contact_phone_number, contacts, details, release_date, entry_name, source
+    (lines 45-127).
+    New ONLY scrapes LIST PAGE: land_file_title, release_date, details (URL),
+    source='dkgs', md5_value. ALL OTHER FIELDS EMPTY. This is a STUB.
+  - [Table] Old writes to entity_land_massif_publicity. New writes to
+    entity_land_transfer_announcement. IMPORTANT: These are DIFFERENT TABLES.
+    Need to verify which table is correct for this data type.
+  - [md5_value] Old: md5(land_parcel_number + massif_position). New: md5(title).
+  - [DETAIL CRAWLING] Old parses detail JSON response. New NEVER visits detail.
+
+================================================================================
+SECTION 3: TAX BUREAU SPIDERS
+================================================================================
+
+--------------------------------------------------------------------------------
+SPIDER: tax_anhui -> entity_government_announcement
+  OLD: data_crawl_server/spider/report/gov_report/tax_bureau/anhui_tax_spider.py
+       + base class tax_spider/main_spider.py
+  NEW: crawl_spider_engine/spiders/report/tax_bureau/tax_anhui_spider.py
+STATUS: MAJOR
+Issues found:
+  - [API ENDPOINT] CRITICAL: Old uses a DIFFERENT endpoint:
+    Old: POST https://anhui.chinatax.gov.cn/module/web/jpage/dataproxy.jsp
+         with paginated record parameters (startrecord, endrecord, perpage=15,
+         45 records per page) and detailed POST data (col=1, appid=1, webid=39,
+         path=/, columnid=9422, sourceContentType=1, unitid=26564,
+         webname='国家税务总局安徽省税务局', permissiontype=0) (lines 12-36 of
+         anhui_tax_spider.py).
+    New: GET https://anhui.chinatax.gov.cn/col/col27414 (a static column page)
+         with no POST parameters.
+    These are completely different API endpoints. The response formats are
+    also different: old expects XML <recordset> format; new expects HTML list.
+
+  - [RESPONSE PARSING] Old (base class main_spider.py lines 40-56): Parses XML
+    response via regex (<recordset>.*?</recordset>) then extracts <li> elements
+    with title/href/release_time.
+    New (line 18): Parses HTML directly with XPath //ul[@class="list"]/li.
+
+  - [CONTENT EXTRACTION] CRITICAL REGRESSION: Old crawls DETAIL pages via
+    get_detail() method (main_spider.py lines 58-85), extracting:
+    - Full HTML content via extract_detail() XPath (line 48 of anhui_tax_spider:
+      //div[@id="zoom"] | //div[@id="img-content"] | ...)
+    - Attachments via extract_attachment() (lines 57-69)
+    - Saves attachments to entity_government_announcement_mapping table
+    New does NOT crawl detail pages at all. Only gets list-page data. The
+    'content', 'abstract', 'emotion', 'announcement_type' fields are ALL EMPTY.
+
+  - [ATTACHMENTS] Old saves attachments to entity_government_announcement_mapping
+    table (main_spider.py lines 95-108). New has NO attachment handling.
+
+  - [CONTENT CLEANUP] Old strips <script> and <style> tags from content (line 51
+    of anhui_tax_spider: html_del_attr_tag). New has no content at all.
+
+  - [PAGING] Old: 45 records per page via POST params (startrecord/endrecord).
+    New: HTML page URL index?htm. Different mechanisms.
+
+  - [md5_value] Old: md5(str(release_time) + announce_title + self.website_source)
+    (main_spider.py line 74).
+    New: md5(date + title + '安徽省税务局') (line 31).
+    Same logical construction (date + title + source). Minor difference: old
+    converts release_time to str(). OK.
+
+  - [Field completeness] Old fills: publish_time, announcement_title,
+    announcement_url, content, source, md5_value.
+    New fills: publish_time, announcement_title, announcement_url, source,
+    md5_value, plus empty strings for announcement_type, abstract, content,
+    emotion.
+    Content is the critical missing field -- without it, the announcement text
+    itself is not collected.
+
+  - NOTE: The old TaxMainSpider base class uses a plugin architecture where each
+    provincial tax spider overrides: url, website_source, generate_params(),
+    generate_data(), extract_detail(), extract_attachment(). This allows code
+    reuse across 30+ provinces. The new project has individual per-province
+    spider files but they all appear to use the same simplified list-only
+    scraping pattern.
+
+================================================================================
+SUMMARY TABLE
+================================================================================
+
+Spider                          | Table                            | Status
+------------------------------------------------------------------------------------------
+amac_products                   | private_fund_products            | MAJOR
+amac_securities_product         | securities_company_product       | MAJOR
+amac_private_equity             | securities_private_equity_fund   | MINOR
+amac_register_flow              | private_fund_register_process    | MINOR
+jggg_land_spider                | entity_land_contract_signing     | MAJOR
+gdjg_jiangsu_land_spider        | entity_land_contract_signing     | MAJOR (wrong website)
+cjgs_land_spider                | entity_land_massif_publicity     | MAJOR
+gdgg_jiangsu_land_spider        | entity_land_massif_publicity     | MAJOR (wrong website)
+crgg_land_spider                | entity_land_transfer_announcement| MAJOR
+dkgs_jiangsu_land_spider        | entity_land_transfer_announcement| MAJOR (wrong website)
+tax_anhui                       | entity_government_announcement   | MAJOR
+
+================================================================================
+CRITICAL FINDINGS REQUIRING IMMEDIATE ACTION
+================================================================================
+
+1. WRONG WEBSITE (gdjg_jiangsu, gdgg_jiangsu, dkgs_jiangsu):
+   These new spiders target landchina.mnr.gov.cn but their old counterparts
+   target www.landjs.com (Jiangsu Land Market). These are COMPLETELY DIFFERENT
+   websites with different APIs, different data, and different page structures.
+   The new spiders will not collect the Jiangsu data and are effectively broken.
+
+2. STUB IMPLEMENTATIONS (gdjg_jiangsu, gdgg_jiangsu, dkgs_jiangsu):
+   These new spiders only scrape the LIST page (title, date, URL) and do NOT
+   crawl detail pages at all. All substantive data fields (20+ per spider) are
+   hardcoded as empty strings. These are placeholder/stub implementations.
+
+3. md5_value MISMATCH (amac_products, jggg_land):
+   md5 construction is DIFFERENT between old and new. This means data that
+   should be unique might be treated as duplicate, or vice versa. Critically:
+   - amac_products: old=md5(manager_name), new=md5(fund_name+fund_number)
+   - jggg_land: old=md5(entry_name+project_location), new=md5(entry_name)
+   These will cause different dedup behavior in the new pipeline.
+
+4. API FIELD NAME MISMATCH (amac_securities_product):
+   Old uses cpmc/cpbm/gljg/tgjg/barq/slrq/dqr/tzlx/sffj/yzzt keys.
+   New uses mpiName/mpiProductCode/aoiName/mpiTrustee/registeredDate/mpiCreateDate.
+   If the API returns one format, the other spider will get empty data.
+   This needs to be verified against actual API responses.
+
+5. MISSING CONTENT (tax_anhui, all tax spiders likely):
+   The new tax spiders do not crawl detail pages, meaning the actual
+   announcement body content is NOT collected. Only titles and URLs are stored.
+   This is a major data loss.
+
+6. MISSING ATTACHMENTS (tax_anhui):
+   Old saves attachment URLs to entity_government_announcement_mapping table.
+   New ignores attachments entirely.
+
+7. MISSING PRICE FIELDS (crgg_land):
+   guarantee_price, starting_price, price_increase, listing_start_time,
+   listing_end_time are all empty in the new spider. These are critical
+   fields for land transfer announcements.
+
+8. MISSING CONTACT FIELDS (cjgs_land):
+   publicity_period, issuing_authority, contact_unit, unit_address, zip_code,
+   contact_phone_number, contacts, email are all empty in the new spider.
+
+================================================================================

@@ -1,0 +1,16 @@
+# CODEOWNERS — 禁止修改文件必须 chenz 审批
+# Gitea 分支保护需同时开启 "Require review from Code Owners"
+
+# 禁止修改（影响线上容器运行）
+settings.py              @chenz
+config/prod.ini          @chenz
+config/docker.ini        @chenz
+Dockerfile               @chenz
+entrypoint.sh            @chenz
+setup.py                 @chenz
+scrapy.cfg               @chenz
+requirements.txt         @chenz
+.gitattributes           @chenz
+/scripts/                @chenz
+/docs/                   @chenz
+/.gitea/                 @chenz
