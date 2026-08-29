@@ -63,6 +63,10 @@ class BaseCollector:
                     f'table={self.data_table}')
         # 订阅 admin 控制指令（§3.3：crawl_admin_server Redis pub/sub 统一调度）
         self._start_cmd_listener()
+        # 独立心跳线程：轮询间隔可能远大于心跳 TTL(120s)，心跳必须与轮询节拍解耦，
+        # 否则长轮询采集器（300s/600s）心跳键过期会被 supervisor 误判失联反复重启
+        threading.Thread(target=self._heartbeat_loop, daemon=True,
+                         name=f'{self.name}-heartbeat').start()
         while not self._stop.is_set():
             t0 = time.monotonic()
             try:
@@ -151,6 +155,16 @@ class BaseCollector:
         return get_mysql  # 返回工厂函数（_persist 每次调用取新连接），不是连接本身
 
     # ── 心跳 / 统计 ──────────────────────────────────────────
+
+    def _heartbeat_loop(self):
+        """独立心跳线程：与轮询节拍解耦，防止长轮询导致心跳 TTL 过期被 supervisor 误杀"""
+        while not self._stop.is_set():
+            try:
+                self._heartbeat_if_due()
+                self._stats_if_due()
+            except Exception as e:
+                logger.debug(f'[Collector:{self.name}] 心跳/统计线程异常: {e}')
+            self._stop.wait(self.heartbeat_interval)
 
     def _heartbeat_if_due(self):
         now = time.time()
