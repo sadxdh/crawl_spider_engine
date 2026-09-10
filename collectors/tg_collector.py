@@ -231,7 +231,7 @@ class TgNewsCollector(BaseCollector):
             try:
                 ent = await client.get_entity(ch)
                 resolved.append(ent)
-                self._active_entities.add(ent.id)
+                self._active_entities.add(_peer_id(ent))
                 logger.info(f'[tg_news] 频道已解析: {ch}')
             except Exception as e:
                 logger.warning(f'[tg_news] 频道解析失败: {ch} — {e}')
@@ -280,7 +280,7 @@ class TgNewsCollector(BaseCollector):
                         for ch in added:
                             try:
                                 ent = await client.get_entity(ch)
-                                self._active_entities.add(ent.id)
+                                self._active_entities.add(_peer_id(ent))
                                 logger.info(f'[tg_news] 热添加生效: {ch} (id={ent.id})')
                             except Exception as e:
                                 logger.warning(f'[tg_news] 热添加频道解析失败: {ch} — {e}')
@@ -315,6 +315,20 @@ class TgNewsCollector(BaseCollector):
 
     def _table_ddl_for(self, table: str) -> str:
         return self.table_ddl.format(table=table)
+
+
+def _peer_id(entity):
+    """Telethon entity -> marked chat_id (channels carry the -100 prefix).
+
+    event.chat_id is the *marked* peer id (e.g. -1001234567890) whereas
+    entity.id is the raw id; comparing them directly never matches, so every
+    message was dropped silently and no TG rows were ever persisted.
+    """
+    try:
+        from telethon import utils as _tu
+        return _tu.get_peer_id(entity)
+    except Exception:
+        return getattr(entity, "id", None)
 
 
 def _safe_table(name: str) -> str:
