@@ -1,0 +1,25 @@
+name: globalscout-domestic
+
+services:
+  collectors:
+    build:
+      context: ..
+      dockerfile: Dockerfile.overseas
+    network_mode: host
+    restart: unless-stopped
+    mem_limit: 240m
+    env_file:
+      - /etc/globalscout/domestic-collectors.env
+    environment:
+      CURRENT_ENV: prod
+      SPIDER_MYSQL_HOST_PROD: 127.0.0.1
+      CRAWL_OUTBOUND_PROXY: ""
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      PRICE_SOCKS5_PROXY: direct
+      BINANCE_PROXY: direct
+      FLASH_NEWS_SOURCES: sina,wallst,blockbeats
+      MACRO_PRICE_SOURCES: tencent
+      KLINE_SOURCE_GROUPS: cn
+      COLLECTOR_GROUP: flash_news,macro_prices,market_kline
