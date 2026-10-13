@@ -1,0 +1,57 @@
+name: globalscout-overseas
+
+services:
+  db-link:
+    build:
+      context: .
+      dockerfile: db-link.Dockerfile
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - -NT
+      - -o
+      - ExitOnForwardFailure=yes
+      - -o
+      - ServerAliveInterval=30
+      - -o
+      - ServerAliveCountMax=3
+      - -o
+      - StrictHostKeyChecking=yes
+      - -i
+      - /run/secrets/db_link
+      - -L
+      - 127.0.0.1:3306:127.0.0.1:3306
+      - ubuntu@49.234.192.137
+    volumes:
+      - /etc/globalscout/db-link-ed25519:/run/secrets/db_link:ro
+      - /etc/globalscout/known_hosts:/root/.ssh/known_hosts:ro
+
+  collectors:
+    build:
+      context: ..
+      dockerfile: Dockerfile.overseas
+    network_mode: host
+    restart: unless-stopped
+    mem_limit: 520m
+    env_file:
+      - /etc/globalscout/overseas-collectors.env
+    environment:
+      CURRENT_ENV: prod
+      SPIDER_MYSQL_HOST_PROD: 127.0.0.1
+      CRAWL_OUTBOUND_PROXY: ""
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      PRICE_SOCKS5_PROXY: direct
+      BINANCE_PROXY: direct
+      FLASH_NEWS_SOURCES: finnhub,treeofalpha
+      MACRO_PRICE_SOURCES: fred
+      KLINE_SOURCE_GROUPS: crypto,global
+      COLLECTOR_GROUP: >-
+        flash_news,tg_news,market_quote,onchain_quote,sentiment_metrics,
+        gate_micro,deribit_options,liquidation_data,gold_market,
+        hyperliquid_data,taker_flow,etherscan_tx,coinglass_data,
+        okx_microstructure,macro_prices,fomc_captions,market_kline,
+        prediction_market
+    depends_on:
+      - db-link

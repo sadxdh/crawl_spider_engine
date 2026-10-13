@@ -1,0 +1,10 @@
+requests==2.31.0
+loguru==0.7.2
+PyMySQL==1.1.0
+DBUtils==3.0.3
+redis==5.0.1
+telethon==1.44.0
+pyaes==1.6.1
+pysocks==1.7.1
+python-socks==2.4.4
+aiohttp>=3.9.5
