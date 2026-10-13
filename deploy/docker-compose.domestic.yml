@@ -13,6 +13,8 @@ services:
     environment:
       CURRENT_ENV: prod
       SPIDER_MYSQL_HOST_PROD: 127.0.0.1
+      SPIDER_REDIS_HOST_PROD: 127.0.0.1
+      COLLECTOR_REDIS_ENABLED: "1"
       CRAWL_OUTBOUND_PROXY: ""
       HTTP_PROXY: ""
       HTTPS_PROXY: ""

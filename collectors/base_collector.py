@@ -20,6 +20,11 @@ _OUTBOUND_PROXY = os.getenv('CRAWL_OUTBOUND_PROXY', '').strip()
 NO_PROXY = {'http': None, 'https': None}
 
 
+def redis_reporting_enabled(value: str | None = None) -> bool:
+    raw = value if value is not None else os.getenv('COLLECTOR_REDIS_ENABLED', '1')
+    return raw.strip().lower() not in {'0', 'false', 'no', 'off'}
+
+
 def get_proxies():
     """返回 requests 用的 proxies 参数：配置了 CRAWL_OUTBOUND_PROXY 则走代理，否则直连"""
     if _OUTBOUND_PROXY:
@@ -57,7 +62,11 @@ class BaseCollector:
 
     def start(self):
         """启动采集循环（阻塞）；子类在独立线程/进程调用"""
-        self._redis = self._redis or self._get_redis()
+        if redis_reporting_enabled():
+            self._redis = self._redis or self._get_redis()
+        else:
+            self._redis = None
+            logger.info(f'[Collector:{self.name}] Redis 心跳/控制已禁用')
         self._mysql_get_conn = self._mysql_get_conn or self._get_mysql()
         logger.info(f'[Collector:{self.name}] 启动 poll_interval={self.poll_interval}s '
                     f'table={self.data_table}')
