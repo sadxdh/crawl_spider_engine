@@ -26,6 +26,7 @@ import requests
 from loguru import logger
 
 from collectors.base_collector import BaseCollector
+from collectors.source_selection import optional_proxy, selected_sources
 
 _QT_URL = 'https://qt.gtimg.cn/q='
 _HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0'}
@@ -36,9 +37,10 @@ _FRED_URL = 'https://api.stlouisfed.org/fred/series/observations'
 _FRED_SERIES = [('DGS10', 'US10Y', '10Y美债'), ('DGS30', 'US30Y', '30Y美债')]
 
 # 腾讯行情必须走 SOCKS5（直连被重置）
-_SOCKS5_PROXY = (os.getenv('PRICE_SOCKS5_PROXY')
-                 or os.getenv('ALL_PROXY')
-                 or 'socks5://host.docker.internal:11080')
+_SOCKS5_PROXY = optional_proxy(
+    'PRICE_SOCKS5_PROXY',
+    os.getenv('ALL_PROXY') or 'socks5://host.docker.internal:11080',
+)
 _PROXIES = {'http': _SOCKS5_PROXY, 'https': _SOCKS5_PROXY} if _SOCKS5_PROXY else {}
 
 POLL_INTERVAL = int(os.getenv('MACRO_PRICES_POLL_INTERVAL', '300'))  # 5min
@@ -81,6 +83,8 @@ class MacroPricesCollector(BaseCollector):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._last_snapshot = {}
+        self._sources = selected_sources('MACRO_PRICE_SOURCES', {'tencent', 'fred'})
+        logger.info('[macro_prices] 启用来源: {}', ','.join(sorted(self._sources)) or '无')
 
     # ── 腾讯行情 ────────────────────────────────────────────
 
@@ -135,8 +139,6 @@ class MacroPricesCollector(BaseCollector):
 
     def _fetch_qt(self, codes: list) -> dict:
         """批量请求腾讯行情，返回 {ticker: parsed}"""
-        if not _PROXIES:
-            return {}
         results = {}
         try:
             r = requests.get(_QT_URL + ','.join(codes), headers=_HEADERS, timeout=12,
@@ -193,8 +195,9 @@ class MacroPricesCollector(BaseCollector):
     # ── BaseCollector 实现 ───────────────────────────────────
 
     def poll_once(self) -> list:
-        results = self._fetch_qt(list(QT_CODES.keys()))
-        results.update(self._fetch_fred())
+        results = self._fetch_qt(list(QT_CODES.keys())) if 'tencent' in self._sources else {}
+        if 'fred' in self._sources:
+            results.update(self._fetch_fred())
         if not results:
             logger.warning('[macro_prices] 无数据（腾讯行情/FRED 均失败）')
         rows = []

@@ -21,6 +21,7 @@ import requests
 from loguru import logger
 
 from collectors.base_collector import BaseCollector
+from collectors.source_selection import selected_sources
 
 _UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
        'Chrome/130.0.0.0 Safari/537.36')
@@ -228,6 +229,9 @@ class FlashNewsCollector(BaseCollector):
             'blockbeats': (_poll_blockbeats, INTERVALS['blockbeats']),
             'treeofalpha': (_poll_treeofalpha, INTERVALS['treeofalpha']),
         }
+        enabled = selected_sources('FLASH_NEWS_SOURCES', self._sources)
+        self._sources = {name: spec for name, spec in self._sources.items() if name in enabled}
+        logger.info('[flash_news] 启用来源: {}', ','.join(sorted(self._sources)) or '无')
 
     def poll_once(self) -> list:
         """一个主循环周期：按源间隔跳数轮询到期的源，按源分表落库"""

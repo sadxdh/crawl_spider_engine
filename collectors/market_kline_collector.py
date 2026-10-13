@@ -22,12 +22,13 @@ import requests
 from loguru import logger
 
 from collectors.base_collector import BaseCollector
+from collectors.source_selection import optional_proxy, selected_sources
 
 POLL_INTERVAL = int(os.getenv('KLINE_POLL_INTERVAL', '300'))  # 5min
 
 # ── 加密（Binance + vultr 代理，与战略部一致） ──
 _BINANCE_HOSTS = ['api.binance.com', 'api1.binance.com', 'api2.binance.com', 'api3.binance.com']
-_PROXY_URL = os.getenv('BINANCE_PROXY', 'socks5h://172.17.0.1:11080')
+_PROXY_URL = optional_proxy('BINANCE_PROXY', 'socks5h://172.17.0.1:11080')
 _CRYPTO = [('BTCUSDT', 'BTCUSDT'), ('ETHUSDT', 'ETHUSDT'), ('SOLUSDT', 'SOLUSDT')]
 
 # ── 指数（新浪，与战略部一致） ──
@@ -76,9 +77,17 @@ class MarketKlineCollector(BaseCollector):
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='市场K线（战略部回测收编，爬虫统一采集）'
     """
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._source_groups = selected_sources(
+            'KLINE_SOURCE_GROUPS',
+            {'crypto', 'cn', 'global'},
+        )
+        logger.info('[kline] 启用来源组: {}', ','.join(sorted(self._source_groups)) or '无')
+
     def _fetch_binance(self, symbol: str) -> list:
         """Binance 1h K线（vultr 代理）"""
-        proxy = {'https': _PROXY_URL, 'http': _PROXY_URL}
+        proxy = {'https': _PROXY_URL, 'http': _PROXY_URL} if _PROXY_URL else None
         params = {'symbol': symbol, 'interval': '1h', 'limit': 300}
         for host in _BINANCE_HOSTS:
             try:
@@ -176,18 +185,22 @@ class MarketKlineCollector(BaseCollector):
     def poll_once(self) -> list:
         rows = []
         # 1. 加密（Binance 1h）
-        for sym, out in _CRYPTO:
-            for k in self._fetch_binance(sym):
-                rows.append({'symbol': out, 'interval': '1h', **k, 'source': 'binance'})
+        if 'crypto' in self._source_groups:
+            for sym, out in _CRYPTO:
+                for k in self._fetch_binance(sym):
+                    rows.append({'symbol': out, 'interval': '1h', **k, 'source': 'binance'})
         # 2. 指数（新浪 1h）
         for code, (out, tz, market) in _SINA_INDEX.items():
-            fn = self._fetch_sina_cn if market == 'cn' else self._fetch_sina_us
-            for k in fn(code):
-                rows.append({'symbol': out, 'interval': '1h', **k, 'source': 'sina'})
+            group = 'cn' if market == 'cn' else 'global'
+            if group in self._source_groups:
+                fn = self._fetch_sina_cn if market == 'cn' else self._fetch_sina_us
+                for k in fn(code):
+                    rows.append({'symbol': out, 'interval': '1h', **k, 'source': 'sina'})
         # 3. 商品（新浪日线 1d）
-        for code in _SINA_COMMODITY:
-            for k in self._fetch_sina_commodity(code):
-                rows.append({'symbol': code, 'interval': '1d', **k, 'source': 'sina'})
+        if 'global' in self._source_groups:
+            for code in _SINA_COMMODITY:
+                for k in self._fetch_sina_commodity(code):
+                    rows.append({'symbol': code, 'interval': '1d', **k, 'source': 'sina'})
         if rows:
             from collections import Counter
             cnt = Counter(r['symbol'] for r in rows)
